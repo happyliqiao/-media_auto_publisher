@@ -1,0 +1,58 @@
+{
+  "storage_dir": "E:\\AI_Content_AutoPublish",
+  "start_date": "2026-06-03",
+  "timezone": "Asia/Shanghai",
+  "dry_run": true,
+  "topic": {
+    "primary": "OpenAI Codex 与 Claude Code 的功能、作用、使用场景，以及免费获取一个月使用额度的活动说明",
+    "required_disclaimer": "免费额度、领取方式和可用范围以官方或活动页面实时说明为准。"
+  },
+  "content": {
+    "language": "zh-CN",
+    "min_chars": 700,
+    "max_chars": 1400,
+    "style": "实用、清晰、面向想提升开发效率的职场人和技术学习者",
+    "campaign_url": "",
+    "openai_model": "gpt-5.5"
+  },
+  "generation": {
+    "provider": "template",
+    "openai_api_key_env": "OPENAI_API_KEY"
+  },
+  "platforms": {
+    "toutiao": {
+      "enabled": false,
+      "mode": "manual",
+      "note": "建议优先使用平台官方创作者接口；网页自动化需要你授权登录会话，遇到验证码/风控会停止。"
+    },
+    "wechat": {
+      "enabled": false,
+      "mode": "official_api",
+      "app_id_env": "WECHAT_APP_ID",
+      "app_secret_env": "WECHAT_APP_SECRET",
+      "note": "微信公众号发布需要公众号接口权限，草稿/群发需按微信官方规则配置。"
+    },
+    "xiaohongshu": {
+      "enabled": false,
+      "mode": "manual",
+      "note": "小红书开放发布接口能力有限，建议先生成待发布文案和人工确认队列。"
+    }
+  },
+  "review": {
+    "blocked_terms": [
+      "保证免费",
+      "永久免费",
+      "100%领取",
+      "破解",
+      "绕过",
+      "薅羊毛",
+      "内部渠道"
+    ],
+    "required_terms": [
+      "OpenAI Codex",
+      "Claude Code",
+      "免费",
+      "一个月"
+    ]
+  }
+}

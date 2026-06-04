@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+logs/
+browser_state/
+config.json
+*.local.json
+.env
+*.log
+.DS_Store
+Thumbs.db
