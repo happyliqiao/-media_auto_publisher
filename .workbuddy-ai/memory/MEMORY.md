@@ -29,10 +29,12 @@
 - 远端：`https://github.com/happyliqiao/-media_auto_publisher.git`，分支 main。
 - 依赖：`playwright>=1.40`（仅浏览器自动化需要），`openai` 为可选。
 
-## 云端运行约定
-- **已确认方案**：云服务器全托管，只做今日头条（用户 2026-10-26 决策）。
+## 云端运行约定（备选，用户 2026-10-26 决定改走本机）
+- **最终路线：用户电脑工作时段开着，daemon 到点本机发布**。用户没有服务器，放弃云端方案。
+- daemon 每轮生成后自动调用浏览器发布，发布时刻≈排期时间；发布前校验是否在 `publish_hours` 窗口内。
+- 云端方案保留在 `deploy/` 与 `.github/workflows/generate.yml`，作为备选，未删除。
 - **文案生成**走 GitHub Actions（`.github/workflows/generate.yml`，每 3 小时一次，UTC cron），电脑不用开机。
-- **头条自动发布**必须有一台常开机器：GitHub Actions runner 是临时的、IP 是数据中心地址，存不住登录态也过不了风控。
+- **头条自动发布**必须有一台常开的机器：GitHub Actions runner 是临时的、IP 是数据中心地址，存不住登录态也过不了风控。
 - 云端方案 = 国内轻量 VPS（2 核 2G，约 ¥60–90/月）+ Xvfb + Playwright Chromium + systemd + noVNC 人工登录一次。
 - 部署脚本：`deploy/install_cloud.sh`（一键装依赖/建 venv/装 systemd）；单元在 `deploy/systemd/`。
 - 发布开关用 `deploy/enable_publish.sh on|off`，一条命令同时改 systemd 的 `MAP_DRY_RUN` 与 config 的 `platforms.toutiao.enabled`。
@@ -42,7 +44,19 @@
 - 详见 `deploy/README.md`（方案 A 全托管 / 方案 B 仅 Actions / 方案 C 混合）。
 - 未过审稿件存入 `storage_dir/_rejected/`，不进入查重基线（`storage.recent_texts` 跳过 `_` 开头的目录）。
 
+## 本机运行约定
+- **playwright 装在系统 Python**（`C:\Users\liqiao\AppData\Local\Programs\Python\Python313`），**托管 Python 里没有**。`start_daemon.ps1` 会逐个探测候选解释器是否 `import playwright` 成功，优先用装了的那个，否则发布环节会被静默跳过。
+- 浏览器用本机 Microsoft Edge（Windows 分支走 Edge + CDP 9223），不需要额外下载 Chromium。
+- 计划任务用 **Interactive 登录主体**（`install_startup_task.ps1`），否则有头浏览器起不来。
+- **后台日志必须行缓冲**：`main.py` 里 `sys.stdout.reconfigure(line_buffering=True)` + `start_daemon.ps1` 用 `-u`。否则 stdout 重定向到文件时 Python 块缓冲，日志长时间是空的。
+- PowerShell 脚本一律存为 **UTF-8 with BOM**（PS 5.1 读无 BOM 的中文会乱码）。
+- `main.py` 命令：`plan` / `run-once` / `daemon` / `next-interval` / `publish-dry-run` / `publish-now --submit` / `enable-publish` / `disable-publish`。
+- `enable-publish` 一条命令同时改 `config.json` 的 `dry_run` 与 `platforms.toutiao.enabled`。
+- 头条发布模式由 `platforms.toutiao.options.schedule_offset_hours` 决定：`0` = 立即发布，`>0` = 用头条自身定时发布。
+- 首次使用必须先 `python toutiao_browser.py authorize` 人工登录一次，登录态存 `browser_state/toutiao`。
+
 ## 发布节奏约定
 - 当前 `schedule.stages` 为 **6h → 4h → 3h → 2h**（原 4/3/2/1 已下调）。
 - 配合 `publish_hours: [7, 23]`，约合每天 3 → 4 → 6 → 8 篇。
 - 调频入口在 `config.json` 的 `schedule.stages`；提速前先观察真实账号数据。
+- 用户头条账号是**老号**（有一定内容基础），风控压力比新号小。
