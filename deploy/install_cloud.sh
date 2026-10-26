@@ -38,8 +38,30 @@ python3 -m venv .venv
 echo "==> 初始化配置"
 if [ ! -f config.json ]; then
   cp config.example.json config.json
-  echo "    已生成 config.json，按需修改 platforms.toutiao.options"
+  echo "    已生成 config.json"
 fi
+
+echo "==> 按部署日期重置排期起点，并按需启用头条发布"
+APP_DIR="$APP_DIR" DRY_RUN="$DRY_RUN" ./.venv/bin/python - <<'PY'
+import datetime
+import json
+import os
+from pathlib import Path
+
+path = Path(os.environ["APP_DIR"]) / "config.json"
+cfg = json.loads(path.read_text(encoding="utf-8"))
+
+# 排期从部署当天重新开始第一周，避免沿用示例里的旧日期直接跳到高频档
+cfg.setdefault("schedule", {})["start_date"] = datetime.date.today().isoformat()
+
+dry_run = os.environ.get("DRY_RUN", "true").strip().lower() in {"1", "true", "yes", "on"}
+cfg["dry_run"] = dry_run
+cfg.setdefault("platforms", {}).setdefault("toutiao", {})["enabled"] = not dry_run
+
+path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+print(f"    start_date={cfg['schedule']['start_date']} dry_run={cfg['dry_run']} "
+      f"toutiao.enabled={cfg['platforms']['toutiao']['enabled']}")
+PY
 
 echo "==> 生成 VNC 访问密码"
 mkdir -p "$HOME/.vnc"

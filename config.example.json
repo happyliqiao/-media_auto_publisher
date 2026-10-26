@@ -5,10 +5,10 @@
   "schedule": {
     "start_date": "2026-10-26",
     "stages": [
-      { "until_week": 1, "interval_hours": 4 },
-      { "until_week": 2, "interval_hours": 3 },
-      { "until_week": 3, "interval_hours": 2 },
-      { "until_week": 0, "interval_hours": 1 }
+      { "until_week": 1, "interval_hours": 6 },
+      { "until_week": 2, "interval_hours": 4 },
+      { "until_week": 3, "interval_hours": 3 },
+      { "until_week": 0, "interval_hours": 2 }
     ],
     "publish_hours": [7, 23]
   },
@@ -41,18 +41,6 @@
         "schedule_offset_hours": 1
       },
       "note": "使用已授权登录的 Edge 会话操作创作者后台；遇到验证码或风控必须人工处理。"
-    },
-    "wechat": {
-      "enabled": false,
-      "mode": "official_api",
-      "app_id_env": "WECHAT_APP_ID",
-      "app_secret_env": "WECHAT_APP_SECRET",
-      "note": "微信公众号发布需要公众号接口权限，草稿/群发需按微信官方规则配置。"
-    },
-    "xiaohongshu": {
-      "enabled": false,
-      "mode": "manual",
-      "note": "小红书开放发布接口能力有限，建议先生成待发布文案和人工确认队列。"
     }
   },
   "review": {

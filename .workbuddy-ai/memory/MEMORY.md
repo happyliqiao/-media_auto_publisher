@@ -28,3 +28,13 @@
 - git 身份用**仓库级**配置：`happyliqiao / happyliqiao@users.noreply.github.com`（全局未设置）。
 - 远端：`https://github.com/happyliqiao/-media_auto_publisher.git`，分支 main。
 - 依赖：`playwright>=1.40`（仅浏览器自动化需要），`openai` 为可选。
+
+## 云端运行约定
+- **文案生成**走 GitHub Actions（`.github/workflows/generate.yml`，每 3 小时一次，UTC cron），电脑不用开机。
+- **头条自动发布**必须有一台常开机器：GitHub Actions runner 是临时的、IP 是数据中心地址，存不住登录态也过不了风控。
+- 云端方案 = 国内轻量 VPS（2 核 2G，约 ¥60–90/月）+ Xvfb + Playwright Chromium + systemd + noVNC 人工登录一次。
+- 部署脚本：`deploy/install_cloud.sh`（一键装依赖/建 venv/装 systemd）；单元在 `deploy/systemd/`。
+- Linux 上头条脚本走 Playwright `launch_persistent_context`（`toutiao_browser.py` 的非 Windows 分支），登录态存 `browser_state/toutiao`。
+- 云端用环境变量覆盖本地配置：`MAP_STORAGE_DIR` / `MAP_DRY_RUN` / `MAP_TIMEZONE` / `MAP_PUBLISH_HOURS`。
+- 详见 `deploy/README.md`（方案 A 全托管 / 方案 B 仅 Actions / 方案 C 混合）。
+- 未过审稿件存入 `storage_dir/_rejected/`，不进入查重基线（`storage.recent_texts` 跳过 `_` 开头的目录）。

@@ -51,11 +51,12 @@ DISPLAY=:99 ./.venv/bin/python toutiao_browser.py authorize
 ### 4. 打开真实发布
 
 ```bash
-sudo sed -i 's/MAP_DRY_RUN=.*/MAP_DRY_RUN=false/' /etc/systemd/system/media-auto-publisher.service
-sudo systemctl daemon-reload && sudo systemctl restart media-auto-publisher
+cd ~/media_auto_publisher
+bash deploy/enable_publish.sh on     # 关闭 dry_run 并启用头条
+bash deploy/enable_publish.sh off    # 想退回只生成不发布时用
 ```
 
-同时把 `config.json` 里的 `platforms.toutiao.enabled` 改成 `true`。
+这条命令会同时改 `systemd` 的 `MAP_DRY_RUN` 和 `config.json` 里的 `platforms.toutiao.enabled`，并重启服务。
 
 ### 5. 日常维护
 
@@ -64,6 +65,14 @@ sudo journalctl -u media-auto-publisher -f     # 看日志
 sudo systemctl restart media-auto-publisher    # 重启
 git -C ~/media_auto_publisher pull && sudo systemctl restart media-auto-publisher   # 更新代码
 ```
+
+### 6. 排期说明
+
+安装脚本会把 `schedule.start_date` 重置为**部署当天**，并按 `6h → 4h → 3h → 2h` 逐周提频（配合
+`publish_hours: [7, 23]`，约等于每天 3 → 4 → 6 → 8 篇）。
+
+> 这个节奏比最早版本的 `4/3/2/1 小时` 保守很多。真实账号高频发同类内容容易被判定为内容农场，
+> 建议先按保守档跑一两周观察数据再决定要不要提速。改法在 `config.json` 的 `schedule.stages`。
 
 ---
 
