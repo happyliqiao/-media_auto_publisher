@@ -1,14 +1,14 @@
 import argparse
 import json
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from content_generator import ContentGenerator
 from publishers import PublisherManager
 from reviewer import ContentReviewer
-from scheduler import next_interval_seconds
+from scheduler import next_run_at, planned_slots_for_day
 from storage import ContentStorage
 
 
@@ -42,33 +42,53 @@ def run_once(config):
     storage = ContentStorage(config)
     publishers = PublisherManager(config)
 
+    compare_count = int(config.get("review", {}).get("recent_compare_count", 20))
     content = generator.generate(now)
-    review = reviewer.review(content)
+    recent = storage.recent_texts(compare_count)
+    review = reviewer.review(content, recent)
     saved = storage.save(content, now, review)
 
     publish_result = publishers.publish(content, saved, review)
 
+    print(f"title={review.get('title', '')}")
     print(f"saved={saved}")
     print(f"review_passed={review['passed']}")
+    print(f"char_count={review['char_count']}")
     if review["issues"]:
         print("review_issues=" + "; ".join(review["issues"]))
     print("publish=" + json.dumps(publish_result, ensure_ascii=False))
+    return review["passed"]
 
 
 def daemon(config):
     tz = get_timezone(config)
     print("daemon_started=true")
     while True:
-        run_once(config)
+        try:
+            run_once(config)
+        except Exception as exc:  # 单次失败不应中断守护进程
+            print(f"run_failed={exc.__class__.__name__}: {exc}")
         now = datetime.now(tz)
-        sleep_seconds = next_interval_seconds(config["start_date"], now)
-        print(f"next_run_in_seconds={sleep_seconds}")
+        target = next_run_at(config, now)
+        sleep_seconds = max(int((target - now).total_seconds()), 60)
+        print(f"next_run_at={target.isoformat()} sleep_seconds={sleep_seconds}")
         time.sleep(sleep_seconds)
+
+
+def plan(config):
+    tz = get_timezone(config)
+    now = datetime.now(tz)
+    slots = planned_slots_for_day(config, now)
+    print(f"date={now.date().isoformat()}")
+    print(f"slots={len(slots)}")
+    for slot in slots:
+        print(slot.strftime("%Y-%m-%d %H:%M"))
+    print(f"next_run_at={next_run_at(config, now).isoformat()}")
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["run-once", "daemon", "next-interval"])
+    parser.add_argument("command", choices=["run-once", "daemon", "next-interval", "plan"])
     args = parser.parse_args()
 
     config = load_config()
@@ -78,7 +98,12 @@ def main():
         daemon(config)
     elif args.command == "next-interval":
         tz = get_timezone(config)
-        print(next_interval_seconds(config["start_date"], datetime.now(tz)))
+        now = datetime.now(tz)
+        target = next_run_at(config, now)
+        print(f"next_run_at={target.isoformat()}")
+        print(f"sleep_seconds={max(int((target - now).total_seconds()), 60)}")
+    elif args.command == "plan":
+        plan(config)
 
 
 if __name__ == "__main__":

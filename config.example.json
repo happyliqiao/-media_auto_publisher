@@ -1,19 +1,28 @@
 {
   "storage_dir": "E:\\AI_Content_AutoPublish",
-  "start_date": "2026-06-03",
   "timezone": "Asia/Shanghai",
   "dry_run": true,
+  "schedule": {
+    "start_date": "2026-10-26",
+    "stages": [
+      { "until_week": 1, "interval_hours": 4 },
+      { "until_week": 2, "interval_hours": 3 },
+      { "until_week": 3, "interval_hours": 2 },
+      { "until_week": 0, "interval_hours": 1 }
+    ],
+    "publish_hours": [7, 23]
+  },
   "topic": {
-    "primary": "OpenAI Codex 与 Claude Code 的功能、作用、使用场景，以及免费获取一个月使用额度的活动说明",
-    "required_disclaimer": "免费额度、领取方式和可用范围以官方或活动页面实时说明为准。"
+    "primary": "普通人如何正确、合适地使用 AI 工具：能帮上什么忙、有哪些边界、怎么问才有效",
+    "required_disclaimer": "AI 工具的能力和收费规则会持续变化，具体请以你实际使用的产品说明为准。"
   },
   "content": {
     "language": "zh-CN",
     "min_chars": 700,
-    "max_chars": 1400,
-    "style": "实用、清晰、面向想提升开发效率的职场人和技术学习者",
+    "max_chars": 1600,
+    "style": "平实、具体、有分寸，面向没有技术背景的普通上班族和学习者",
     "campaign_url": "",
-    "openai_model": "gpt-5.5"
+    "openai_model": "gpt-4.1"
   },
   "generation": {
     "provider": "template",
@@ -22,8 +31,16 @@
   "platforms": {
     "toutiao": {
       "enabled": false,
-      "mode": "manual",
-      "note": "建议优先使用平台官方创作者接口；网页自动化需要你授权登录会话，遇到验证码/风控会停止。"
+      "mode": "browser",
+      "options": {
+        "cover": "无封面",
+        "ads": "不投放广告",
+        "location": "",
+        "declaration": "个人观点，仅供参考",
+        "sync_weitoutiao": false,
+        "schedule_offset_hours": 1
+      },
+      "note": "使用已授权登录的 Edge 会话操作创作者后台；遇到验证码或风控必须人工处理。"
     },
     "wechat": {
       "enabled": false,
@@ -40,19 +57,20 @@
   },
   "review": {
     "blocked_terms": [
-      "保证免费",
-      "永久免费",
-      "100%领取",
+      "月入过万",
+      "躺赚",
+      "一键暴富",
+      "包学会",
+      "保证学会",
+      "百分百有效",
+      "割韭菜",
+      "内部渠道",
       "破解",
-      "绕过",
-      "薅羊毛",
-      "内部渠道"
+      "稳赚不赔"
     ],
-    "required_terms": [
-      "OpenAI Codex",
-      "Claude Code",
-      "免费",
-      "一个月"
-    ]
+    "required_terms": ["AI", "普通人"],
+    "max_similarity": 0.65,
+    "block_on_duplicate": true,
+    "recent_compare_count": 20
   }
 }

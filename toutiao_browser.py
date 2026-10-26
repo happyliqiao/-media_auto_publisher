@@ -81,7 +81,15 @@ def latest_toutiao_queue(config):
     files = sorted(queue_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not files:
         raise RuntimeError(f"未找到今日头条待发布队列：{queue_dir}")
-    return files[0]
+    for path in files:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if data.get("consumed_at") or data.get("status") in {"submitted", "consumed"}:
+            continue
+        return path
+    raise RuntimeError(f"今日头条队列中没有待发布内容（均已完成）：{queue_dir}")
 
 
 def read_content_from_queue(queue_path):
@@ -181,19 +189,59 @@ def try_click_text(page, text, timeout=1500):
         return None
 
 
-def set_toutiao_options(page):
+DEFAULT_OPTIONS = {
+    "cover": "无封面",
+    "ads": "不投放广告",
+    "location": "",
+    "declaration": "个人观点，仅供参考",
+    "sync_weitoutiao": False,
+    "schedule_offset_hours": 1,
+}
+
+
+def toutiao_options(config):
+    options = dict(DEFAULT_OPTIONS)
+    options.update((config.get("platforms", {}).get("toutiao", {}) or {}).get("options", {}) or {})
+    return options
+
+
+def set_toutiao_options(page, options=None):
+    options = options or DEFAULT_OPTIONS
     actions = []
 
     page.set_default_timeout(1500)
 
-    steps = [
-        ("cover=none", lambda: try_click_text(page, "无封面")),
-        ("ads=no", lambda: try_click_text(page, "不投放广告") or try_click_text(page, "不投放") or try_click_text(page, "暂不投放")),
-        ("weitoutiao=on", lambda: try_click_text(page, "同步发布微头条") or try_click_text(page, "发布微头条") or try_click_text(page, "同步到微头条") or try_click_text(page, "微头条")),
-        ("declaration=open", lambda: try_click_text(page, "作品声明")),
-        ("declaration=personal_view", lambda: try_click_text(page, "个人观点")),
-        ("declaration=reference_only", lambda: try_click_text(page, "仅供参考")),
-    ]
+    cover = (options.get("cover") or "").strip()
+    ads = (options.get("ads") or "").strip()
+    declaration = (options.get("declaration") or "").strip()
+    location = (options.get("location") or "").strip()
+
+    steps = []
+    if cover:
+        steps.append((f"cover={cover}", lambda: try_click_text(page, cover)))
+    if ads:
+        steps.append(
+            (
+                f"ads={ads}",
+                lambda: try_click_text(page, ads)
+                or try_click_text(page, "不投放")
+                or try_click_text(page, "暂不投放"),
+            )
+        )
+    if options.get("sync_weitoutiao"):
+        steps.append(
+            (
+                "weitoutiao=on",
+                lambda: try_click_text(page, "同步发布微头条")
+                or try_click_text(page, "发布微头条")
+                or try_click_text(page, "同步到微头条")
+                or try_click_text(page, "微头条"),
+            )
+        )
+    if declaration:
+        steps.append(("declaration=open", lambda: try_click_text(page, "作品声明")))
+        for part in [p.strip() for p in declaration.replace("，", ",").split(",") if p.strip()]:
+            steps.append((f"declaration={part}", lambda part=part: try_click_text(page, part)))
 
     for label, fn in steps:
         try:
@@ -202,49 +250,55 @@ def set_toutiao_options(page):
         except Exception as exc:
             actions.append(f"{label}:failed:{exc.__class__.__name__}")
 
-    try:
-        location_opened = try_click_text(page, "添加位置") or try_click_text(page, "位置")
-    except Exception:
-        location_opened = None
-    if location_opened:
-        selector = type_first_match(
-            page,
-            [
-                "input[placeholder*='搜索']",
-                "input[placeholder*='位置']",
-                "input[placeholder*='地点']",
-                "input",
-            ],
-            "武汉",
-            timeout=2000,
-        )
-        page.wait_for_timeout(1500)
-        try_click_text(page, "武汉", timeout=2000)
-        actions.append(f"location=wuhan selector={selector}")
+    if location:
+        try:
+            location_opened = try_click_text(page, "添加位置") or try_click_text(page, "位置")
+        except Exception:
+            location_opened = None
+        if location_opened:
+            selector = type_first_match(
+                page,
+                [
+                    "input[placeholder*='搜索']",
+                    "input[placeholder*='位置']",
+                    "input[placeholder*='地点']",
+                    "input",
+                ],
+                location,
+                timeout=2000,
+            )
+            page.wait_for_timeout(1500)
+            try_click_text(page, location, timeout=2000)
+            actions.append(f"location={location} selector={selector}")
+    else:
+        actions.append("location=skipped")
 
-    publish_time = datetime.now() + timedelta(hours=1)
-    publish_time = publish_time.replace(minute=0, second=0, microsecond=0)
-    if try_click_text(page, "定时发布", timeout=1200):
-        actions.append("schedule=open")
-        time_text = publish_time.strftime("%Y-%m-%d %H:%M")
-        selector = type_first_match(
-            page,
-            [
-                "input[placeholder*='时间']",
-                "input[placeholder*='日期']",
-                "input[class*='time']",
-                "input",
-            ],
-            time_text,
-            timeout=2000,
-        )
-        actions.append(f"schedule_time={time_text} selector={selector}")
+    offset = int(options.get("schedule_offset_hours", 1) or 0)
+    if offset > 0:
+        publish_time = datetime.now() + timedelta(hours=offset)
+        publish_time = publish_time.replace(minute=0, second=0, microsecond=0)
+        if try_click_text(page, "定时发布", timeout=1200):
+            actions.append("schedule=open")
+            time_text = publish_time.strftime("%Y-%m-%d %H:%M")
+            selector = type_first_match(
+                page,
+                [
+                    "input[placeholder*='时间']",
+                    "input[placeholder*='日期']",
+                    "input[class*='time']",
+                    "input",
+                ],
+                time_text,
+                timeout=2000,
+            )
+            actions.append(f"schedule_time={time_text} selector={selector}")
 
     return actions
 
 
 def publish_latest(dry_run=True):
     config = load_config()
+    options = toutiao_options(config)
     queue_path = latest_toutiao_queue(config)
     queue, content = read_content_from_queue(queue_path)
     title, body = split_title_body(content)
@@ -296,7 +350,7 @@ def publish_latest(dry_run=True):
 
         if dry_run:
             print("stage=set_options")
-            actions = set_toutiao_options(page)
+            actions = set_toutiao_options(page, options)
             screenshot = ROOT / "logs" / "toutiao_publish_dry_run.png"
             screenshot.parent.mkdir(parents=True, exist_ok=True)
             page.screenshot(path=str(screenshot), full_page=True)
@@ -308,7 +362,7 @@ def publish_latest(dry_run=True):
             print("已填入页面但未点击发布。请在浏览器中检查内容。")
             return 0
 
-        actions = set_toutiao_options(page)
+        actions = set_toutiao_options(page, options)
         print("actions=" + json.dumps(actions, ensure_ascii=False))
         clicked = click_first_match(page, ["button:has-text('定时发布')"], timeout=5000)
         if clicked:
@@ -335,6 +389,7 @@ def publish_latest(dry_run=True):
         page.screenshot(path=str(screenshot), full_page=True)
         queue["status"] = "submitted"
         queue["submitted_at"] = time.strftime("%Y%m%d_%H%M%S")
+        queue["consumed_at"] = queue["submitted_at"]
         queue["submit_screenshot"] = str(screenshot)
         queue_path.write_text(json.dumps(queue, ensure_ascii=False, indent=2), encoding="utf-8")
         print("toutiao_publish_submitted=true")

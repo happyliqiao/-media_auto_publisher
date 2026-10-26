@@ -37,12 +37,18 @@ class PublisherManager:
             if name == "wechat" and mode == "official_api":
                 results.append(self._publish_wechat(content, cfg).__dict__)
             else:
-                results.append(PublishResult(name, "manual_required", "未配置官方接口或授权会话，需要人工确认发布").__dict__)
+                queue_path = self._write_publish_queue(name, content, saved_path, "pending")
+                results.append(
+                    PublishResult(name, "manual_required", f"需要人工或浏览器发布，队列：{queue_path}").__dict__
+                )
         return results
 
-    def _write_publish_queue(self, platform, content, saved_path, status):
+    def queue_dir(self, platform):
         storage_dir = Path(self.config.get("storage_dir", "E:\\AI_Content_AutoPublish"))
-        queue_dir = storage_dir / "_publish_queue" / platform
+        return storage_dir / "_publish_queue" / platform
+
+    def _write_publish_queue(self, platform, content, saved_path, status):
+        queue_dir = self.queue_dir(platform)
         queue_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         queue_path = queue_dir / f"{stamp}.json"
@@ -54,6 +60,7 @@ class PublisherManager:
                     "content_file": saved_path,
                     "content_preview": content[:300],
                     "created_at": stamp,
+                    "consumed_at": None,
                 },
                 ensure_ascii=False,
                 indent=2,

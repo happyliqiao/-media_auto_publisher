@@ -8,13 +8,35 @@ from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parent
 STATE_DIR = ROOT / "browser_state" / "toutiao"
-QUEUE_DIR = Path(r"E:\AI_Content_AutoPublish\_publish_queue\toutiao")
 PUBLISH_URL = "https://mp.toutiao.com/profile_v4/graphic/publish"
 CDP_URL = "http://127.0.0.1:9223"
 
-WUHAN = "武汉"
+DEFAULT_OPTIONS = {
+    "cover": "无封面",
+    "ads": "不投放广告",
+    "location": "",
+    "declaration": "个人观点，仅供参考",
+    "schedule_offset_hours": 1,
+}
+
+
+def _load_config():
+    for name in ("config.json", "config.example.json"):
+        path = ROOT / name
+        if path.exists():
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+    return {}
+
+
+CONFIG = _load_config()
+OPTIONS = dict(DEFAULT_OPTIONS)
+OPTIONS.update((CONFIG.get("platforms", {}).get("toutiao", {}) or {}).get("options", {}) or {})
+QUEUE_DIR = Path(CONFIG.get("storage_dir", r"E:\AI_Content_AutoPublish")) / "_publish_queue" / "toutiao"
+
 NETWORK = "取材网络"
-PERSONAL = "个人观点，仅供参考"
 SCHEDULE = "定时发布"
 CONFIRM_SCHEDULE = "预览并定时发布"
 OK = "确定"
@@ -209,22 +231,27 @@ def ensure_option_checked(page, text, selector=".byte-radio, .byte-checkbox", ti
 
 
 def set_location(page):
+    city = (OPTIONS.get("location") or "").strip()
+    if not city:
+        print(json.dumps({"location": "skipped"}, ensure_ascii=False))
+        return True
+
     selector = page.locator(".position-select").first
     text = selector.inner_text(timeout=3000).strip()
-    if WUHAN in text:
+    if city in text:
         print(json.dumps({"location": text}, ensure_ascii=False))
         return True
 
     selector.click(force=True)
     page.wait_for_timeout(500)
     page.keyboard.press("Control+A")
-    page.keyboard.type(WUHAN, delay=80)
+    page.keyboard.type(city, delay=80)
     page.wait_for_timeout(1800)
 
     candidates = [
-        f".byte-select-option:has-text('{WUHAN}')",
-        f"[class*='option']:has-text('{WUHAN}')",
-        f"text={WUHAN}",
+        f".byte-select-option:has-text('{city}')",
+        f"[class*='option']:has-text('{city}')",
+        f"text={city}",
     ]
     for candidate in candidates:
         try:
@@ -238,12 +265,13 @@ def set_location(page):
 
     text = selector.inner_text(timeout=3000).strip()
     print(json.dumps({"location": text}, ensure_ascii=False))
-    return WUHAN in text
+    return city in text
 
 
 def set_statement(page):
     labels = page.locator("label")
     result = []
+    declaration = (OPTIONS.get("declaration") or "").strip()
     for i in range(labels.count()):
         data = labels.nth(i).evaluate(
             "e => ({text:(e.innerText || e.textContent || '').trim(), cls:String(e.className)})"
@@ -251,9 +279,9 @@ def set_statement(page):
         if data["text"] == NETWORK and "checked" in data["cls"]:
             labels.nth(i).click(force=True)
             result.append({"unchecked": NETWORK, "index": i})
-        if data["text"] == PERSONAL and "checked" not in data["cls"]:
+        if declaration and data["text"] == declaration and "checked" not in data["cls"]:
             labels.nth(i).click(force=True)
-            result.append({"checked": PERSONAL, "index": i})
+            result.append({"checked": declaration, "index": i})
     page.wait_for_timeout(800)
     print(json.dumps({"statement_actions": result}, ensure_ascii=False))
 
@@ -275,13 +303,18 @@ def submit_schedule(page):
 
 
 def validate_required_options(page):
-    checks = {
-        "cover_none": label_checked(page, "无封面"),
-        "no_ads": label_checked(page, "不投放广告"),
-        "personal_statement": label_checked(page, "个人观点，仅供参考"),
-    }
+    cover = (OPTIONS.get("cover") or "").strip()
+    ads = (OPTIONS.get("ads") or "").strip()
+    declaration = (OPTIONS.get("declaration") or "").strip()
+    checks = {}
+    if cover:
+        checks["cover"] = label_checked(page, cover)
+    if ads:
+        checks["ads"] = label_checked(page, ads)
+    if declaration:
+        checks["declaration"] = label_checked(page, declaration)
     print(json.dumps({"option_checks": checks}, ensure_ascii=False))
-    return all(checks.values())
+    return all(value for value in checks.values()) if checks else True
 
 
 def update_latest_queue(status, scheduled_time=None):
@@ -357,10 +390,14 @@ def main():
     fill_article(page, title, body)
     page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
     page.wait_for_timeout(1000)
-    print(json.dumps({"cover_none_checked": ensure_option_checked(page, "无封面", ".byte-radio")}, ensure_ascii=False))
+    cover = (OPTIONS.get("cover") or "").strip()
+    ads = (OPTIONS.get("ads") or "").strip()
+    if cover:
+        print(json.dumps({"cover_checked": ensure_option_checked(page, cover, ".byte-radio")}, ensure_ascii=False))
     location_ok = set_location(page)
-    click_label(page, "不投放广告", desired_checked=True)
-    print(json.dumps({"no_ads_checked": label_checked(page, "不投放广告")}, ensure_ascii=False))
+    if ads:
+        click_label(page, ads, desired_checked=True)
+        print(json.dumps({"no_ads_checked": label_checked(page, ads)}, ensure_ascii=False))
     click_label(page, "发布得更多收益", desired_checked=True)
     set_statement(page)
     if not validate_required_options(page):
