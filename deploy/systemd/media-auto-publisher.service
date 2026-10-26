@@ -1,0 +1,23 @@
+[Unit]
+Description=Media Auto Publisher daemon (定时生成文案 + 按时发布)
+After=network-online.target xvfb.service
+Wants=network-online.target
+Requires=xvfb.service
+
+[Service]
+Type=simple
+User=__APP_USER__
+WorkingDirectory=__APP_DIR__
+Environment=DISPLAY=:99
+Environment=PYTHONUNBUFFERED=1
+Environment=MAP_STORAGE_DIR=__APP_DIR__/_output
+Environment=MAP_DRY_RUN=__DRY_RUN__
+Environment=MAP_TIMEZONE=Asia/Shanghai
+ExecStart=__APP_DIR__/.venv/bin/python main.py daemon
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

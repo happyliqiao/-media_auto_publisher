@@ -1,0 +1,60 @@
+name: 定时生成文案
+
+on:
+  schedule:
+    # GitHub Actions 的 cron 使用 UTC；北京时间 = UTC + 8
+    # 每 3 小时一次 → 北京时间 08/11/14/17/20/23 点
+    - cron: "0 */3 * * *"
+  workflow_dispatch:
+    inputs:
+      publish_hours:
+        description: '临时覆盖发布时段，如 "7,23"；留空则用配置默认值'
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 准备配置
+        run: cp config.example.json config.json
+
+      - name: 生成文案
+        env:
+          MAP_STORAGE_DIR: ${{ github.workspace }}/_output
+          MAP_DRY_RUN: "true"
+          MAP_TIMEZONE: Asia/Shanghai
+          MAP_PUBLISH_HOURS: ${{ inputs.publish_hours }}
+        run: python main.py run-once | tee run.log
+
+      - name: 写入运行摘要
+        if: always()
+        run: |
+          {
+            echo "## 本次运行结果"
+            echo ""
+            echo '```'
+            cat run.log || echo "无输出"
+            echo '```'
+            echo ""
+            echo "生成的文章见下方产物，或在 Actions 的 Artifacts 中下载。"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 上传产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: content-${{ github.run_id }}
+          path: _output
+          retention-days: 30

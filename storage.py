@@ -13,8 +13,12 @@ class ContentStorage:
     def __init__(self, config):
         self.storage_dir = Path(config.get("storage_dir", "E:\\AI_Content_AutoPublish"))
 
-    def save(self, content: str, now, review):
-        day_dir = self.storage_dir / now.strftime("%Y-%m-%d")
+    def save(self, content: str, now, review, rejected=False):
+        if rejected:
+            # 未通过审核的稿件单独存放，不进入查重基线
+            day_dir = self.storage_dir / "_rejected" / now.strftime("%Y-%m-%d")
+        else:
+            day_dir = self.storage_dir / now.strftime("%Y-%m-%d")
         day_dir.mkdir(parents=True, exist_ok=True)
         stamp = now.strftime("%Y%m%d_%H%M%S")
         content_path = day_dir / f"{stamp}.md"
@@ -26,6 +30,7 @@ class ContentStorage:
                 {
                     "created_at": now.isoformat(),
                     "title": _extract_title(content),
+                    "rejected": rejected,
                     "review": review,
                     "content_file": str(content_path),
                 },
@@ -37,14 +42,15 @@ class ContentStorage:
         return str(content_path)
 
     def recent_texts(self, limit=20):
-        """按时间倒序取最近若干篇正文，供查重使用。"""
+        """按时间倒序取最近若干篇**已通过审核**的正文，供查重使用。"""
         if not self.storage_dir.exists():
             return []
-        files = sorted(
-            self.storage_dir.glob("*/*.md"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
+        files = []
+        for path in self.storage_dir.glob("*/*.md"):
+            if any(part.startswith("_") for part in path.relative_to(self.storage_dir).parts):
+                continue
+            files.append(path)
+        files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
         texts = []
         for path in files[:limit]:
             try:

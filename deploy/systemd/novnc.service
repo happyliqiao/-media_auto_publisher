@@ -1,0 +1,13 @@
+[Unit]
+Description=noVNC web client for :99
+After=x11vnc.service
+Requires=x11vnc.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/websockify --web=/usr/share/novnc 6080 localhost:5900
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

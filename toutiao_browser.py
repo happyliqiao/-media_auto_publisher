@@ -17,13 +17,19 @@ CONFIG_PATH = ROOT / "config.json"
 CREATOR_URL = "https://mp.toutiao.com/profile_v4/index"
 PUBLISH_URL = "https://mp.toutiao.com/profile_v4/graphic/publish"
 CDP_PORT = 9223
+IS_WINDOWS = sys.platform == "win32"
 
 
 def load_config():
-    return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    if CONFIG_PATH.exists():
+        return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    example = ROOT / "config.example.json"
+    return json.loads(example.read_text(encoding="utf-8"))
 
 
 def edge_path():
+    if not IS_WINDOWS:
+        return None
     candidates = [
         Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"),
         Path(r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"),
@@ -34,7 +40,20 @@ def edge_path():
     raise RuntimeError("未找到 Microsoft Edge")
 
 
+def close_browser(browser, context):
+    if browser is not None:
+        browser.close()
+    elif context is not None:
+        context.close()
+
+
 def open_edge(url=CREATOR_URL):
+    """Windows：拉起独立 profile 的 Edge 并开放 CDP；Linux：由 Playwright 持久化上下文接管。"""
+    if not IS_WINDOWS:
+        print("platform=linux")
+        print("将使用 Playwright 持久化上下文启动 Chromium（需要 DISPLAY，Linux 上由 Xvfb 提供）")
+        return None
+
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     args = [
         edge_path(),
@@ -45,7 +64,7 @@ def open_edge(url=CREATOR_URL):
         url,
     ]
     creationflags = 0
-    if sys.platform == "win32":
+    if IS_WINDOWS:
         creationflags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
     subprocess.Popen(args, creationflags=creationflags)
     print("edge_opened=true")
@@ -64,13 +83,42 @@ def connect():
             last_error = exc
             time.sleep(1)
     else:
-        playwright.stop()
-        raise last_error
+        if IS_WINDOWS:
+            playwright.stop()
+            raise last_error
+        # Linux / 云服务器：直接用持久化上下文启动 Chromium，登录态保存在 profile 目录
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        context = playwright.chromium.launch_persistent_context(
+            user_data_dir=str(STATE_DIR),
+            headless=False,
+            args=["--no-first-run", "--no-default-browser-check", "--disable-dev-shm-usage"],
+        )
+        return playwright, None, context
     context = browser.contexts[0] if browser.contexts else browser.new_context()
     return playwright, browser, context
 
 
 def authorize():
+    if not IS_WINDOWS:
+        playwright, browser, context = connect()
+        page = context.pages[-1] if context.pages else context.new_page()
+        try:
+            page.goto(CREATOR_URL, wait_until="domcontentloaded")
+        except Exception as exc:
+            print(f"goto_failed={exc.__class__.__name__}")
+        print("请在远程桌面（VNC/noVNC）中完成今日头条登录、扫码和验证码。")
+        print(f"profile={STATE_DIR}（登录态会持久化到这里）")
+        print("登录完成后回到本终端，按 Ctrl+C 结束。")
+        try:
+            while True:
+                time.sleep(5)
+        except KeyboardInterrupt:
+            print("authorize_done=true")
+        finally:
+            close_browser(browser, context)
+            playwright.stop()
+        return
+
     open_edge(CREATOR_URL)
     print("请在打开的 Edge 窗口中完成今日头条登录/扫码/验证码。")
     print("登录成功并进入创作者后台后，保持这个浏览器窗口打开，再运行 publish-latest。")
@@ -402,7 +450,7 @@ def publish_latest(dry_run=True):
         if dry_run:
             print("浏览器会保持 15 秒，便于你检查页面。")
             time.sleep(15)
-        browser.close()
+        close_browser(browser, context)
         playwright.stop()
 
 

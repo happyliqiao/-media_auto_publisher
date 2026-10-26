@@ -1,0 +1,13 @@
+[Unit]
+Description=x11vnc on :99 (仅用于首次登录与风控人工处理)
+After=xvfb.service fluxbox.service
+Requires=xvfb.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/x11vnc -display :99 -forever -shared -nopw -rfbauth %h/.vnc/passwd -localhost
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

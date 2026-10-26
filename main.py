@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -20,7 +21,27 @@ EXAMPLE_CONFIG_PATH = ROOT / "config.example.json"
 def load_config():
     path = CONFIG_PATH if CONFIG_PATH.exists() else EXAMPLE_CONFIG_PATH
     with path.open("r", encoding="utf-8") as f:
-        return json.load(f)
+        config = json.load(f)
+
+    # 云端（GitHub Actions / Linux 服务器）用环境变量覆盖本地路径，
+    # 这样同一份 config.example.json 可以在 Windows 和 Linux 上复用。
+    storage_dir = os.getenv("MAP_STORAGE_DIR")
+    if storage_dir:
+        config["storage_dir"] = storage_dir
+    dry_run = os.getenv("MAP_DRY_RUN")
+    if dry_run is not None:
+        config["dry_run"] = dry_run.strip().lower() in {"1", "true", "yes", "on"}
+    timezone_name = os.getenv("MAP_TIMEZONE")
+    if timezone_name:
+        config["timezone"] = timezone_name
+    publish_hours = os.getenv("MAP_PUBLISH_HOURS")
+    if publish_hours:
+        try:
+            start_h, end_h = [int(x) for x in publish_hours.split(",")[:2]]
+            config.setdefault("schedule", {})["publish_hours"] = [start_h, end_h]
+        except ValueError:
+            print(f"warning=invalid MAP_PUBLISH_HOURS value={publish_hours}")
+    return config
 
 
 def get_timezone(config):
@@ -46,7 +67,8 @@ def run_once(config):
     content = generator.generate(now)
     recent = storage.recent_texts(compare_count)
     review = reviewer.review(content, recent)
-    saved = storage.save(content, now, review)
+    # 未通过审核（例如与近期内容重复）的稿件不进入正式存档和查重基线
+    saved = storage.save(content, now, review, rejected=not review["passed"])
 
     publish_result = publishers.publish(content, saved, review)
 

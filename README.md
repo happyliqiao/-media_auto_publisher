@@ -103,6 +103,20 @@ python .\toutiao_browser.py publish-latest --submit
 
 本工具聚焦「普通人如何正确使用 AI 工具」的科普与经验分享，不鼓励夸大、诱导或承诺收益类表述。请遵循各平台的内容与自动化规则，不要做绕过验证码、风控或平台限制的操作。
 
+## 云端运行（电脑不用开机）
+
+- **文案生成**：`GitHub Actions → 定时生成文案` 工作流已内置，每 3 小时在云端跑一次，无需本地电脑。首次使用需在 Actions 页面点一次 **Enable workflow**。
+- **头条自动发布**：需要一台常开的云服务器（持久化登录会话 + 有头浏览器），一键脚本见 [`deploy/README.md`](deploy/README.md)。
+
+环境变量（用于云端覆盖本地路径）：
+
+| 变量 | 作用 |
+|---|---|
+| `MAP_STORAGE_DIR` | 存档目录，云端一般设为工作区下的 `_output` |
+| `MAP_DRY_RUN` | `true` 只生成不发布，`false` 真实发布 |
+| `MAP_TIMEZONE` | 时区，默认 `Asia/Shanghai` |
+| `MAP_PUBLISH_HOURS` | 临时覆盖发布时段，如 `7,23` |
+
 ## 文件结构
 
 - `main.py`：命令入口（run-once / daemon / next-interval / plan）
@@ -112,4 +126,6 @@ python .\toutiao_browser.py publish-latest --submit
 - `storage.py`：按时间保存文案并提供近期内容读取
 - `publishers.py`：发布适配器与队列
 - `toutiao_browser.py` / `run_toutiao_full_publish.py`：今日头条浏览器自动化
+- `.github/workflows/generate.yml`：云端定时生成工作流
+- `deploy/`：云服务器一键部署脚本与 systemd 单元
 - `config.example.json`：配置模板
