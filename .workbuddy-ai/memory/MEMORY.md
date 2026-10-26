@@ -30,11 +30,19 @@
 - 依赖：`playwright>=1.40`（仅浏览器自动化需要），`openai` 为可选。
 
 ## 云端运行约定
+- **已确认方案**：云服务器全托管，只做今日头条（用户 2026-10-26 决策）。
 - **文案生成**走 GitHub Actions（`.github/workflows/generate.yml`，每 3 小时一次，UTC cron），电脑不用开机。
 - **头条自动发布**必须有一台常开机器：GitHub Actions runner 是临时的、IP 是数据中心地址，存不住登录态也过不了风控。
 - 云端方案 = 国内轻量 VPS（2 核 2G，约 ¥60–90/月）+ Xvfb + Playwright Chromium + systemd + noVNC 人工登录一次。
 - 部署脚本：`deploy/install_cloud.sh`（一键装依赖/建 venv/装 systemd）；单元在 `deploy/systemd/`。
+- 发布开关用 `deploy/enable_publish.sh on|off`，一条命令同时改 systemd 的 `MAP_DRY_RUN` 与 config 的 `platforms.toutiao.enabled`。
+- 安装脚本会自动把 `schedule.start_date` 重置为部署当天（否则沿用旧日期会直接跳到高频档）。
 - Linux 上头条脚本走 Playwright `launch_persistent_context`（`toutiao_browser.py` 的非 Windows 分支），登录态存 `browser_state/toutiao`。
 - 云端用环境变量覆盖本地配置：`MAP_STORAGE_DIR` / `MAP_DRY_RUN` / `MAP_TIMEZONE` / `MAP_PUBLISH_HOURS`。
 - 详见 `deploy/README.md`（方案 A 全托管 / 方案 B 仅 Actions / 方案 C 混合）。
 - 未过审稿件存入 `storage_dir/_rejected/`，不进入查重基线（`storage.recent_texts` 跳过 `_` 开头的目录）。
+
+## 发布节奏约定
+- 当前 `schedule.stages` 为 **6h → 4h → 3h → 2h**（原 4/3/2/1 已下调）。
+- 配合 `publish_hours: [7, 23]`，约合每天 3 → 4 → 6 → 8 篇。
+- 调频入口在 `config.json` 的 `schedule.stages`；提速前先观察真实账号数据。

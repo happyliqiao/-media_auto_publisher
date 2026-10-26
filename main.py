@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -9,8 +10,16 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from content_generator import ContentGenerator
 from publishers import PublisherManager
 from reviewer import ContentReviewer
-from scheduler import next_run_at, planned_slots_for_day
+from scheduler import next_run_at, planned_slots_for_day, publish_window
 from storage import ContentStorage
+
+
+# 后台运行时 stdout 会被重定向到日志文件，Python 默认块缓冲会让日志长时间为空
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+except Exception:
+    pass
 
 
 ROOT = Path(__file__).resolve().parent
@@ -82,6 +91,42 @@ def run_once(config):
     return review["passed"]
 
 
+def publish_toutiao(config, submit=True):
+    """驱动浏览器把队列里最新的一篇发到今日头条。
+
+    缺依赖、需要人工登录、遇到风控等情况都只记录日志，不抛出异常，
+    保证 daemon 不会因为发布失败而中断。
+    """
+    toutiao_cfg = (config.get("platforms", {}) or {}).get("toutiao", {}) or {}
+    if not toutiao_cfg.get("enabled", False):
+        print("publish_skipped=platform_disabled")
+        return None
+    if config.get("dry_run", True):
+        print("publish_skipped=dry_run")
+        return None
+
+    # 只在约定的发布时段内真正发稿，避免开机瞬间在凌晨也发出去
+    tz = get_timezone(config)
+    now = datetime.now(tz)
+    start_h, end_h = publish_window(config)
+    if not start_h <= now.hour < end_h:
+        print(f"publish_skipped=outside_window now={now.strftime('%H:%M')} window=[{start_h},{end_h})")
+        return None
+
+    try:
+        import toutiao_browser
+    except ImportError as exc:
+        print(f"publish_skipped=playwright_missing ({exc})")
+        print("    提示：执行 pip install -r requirements.txt 安装浏览器自动化依赖")
+        return None
+
+    try:
+        return toutiao_browser.publish_latest(dry_run=not submit)
+    except Exception as exc:
+        print(f"publish_failed={exc.__class__.__name__}: {exc}")
+        return None
+
+
 def daemon(config):
     tz = get_timezone(config)
     print("daemon_started=true")
@@ -90,6 +135,9 @@ def daemon(config):
             run_once(config)
         except Exception as exc:  # 单次失败不应中断守护进程
             print(f"run_failed={exc.__class__.__name__}: {exc}")
+        else:
+            # 生成通过审核并入队后，立刻尝试发布，发布时刻≈本轮排期时间
+            publish_toutiao(config, submit=True)
         now = datetime.now(tz)
         target = next_run_at(config, now)
         sleep_seconds = max(int((target - now).total_seconds()), 60)
@@ -108,9 +156,38 @@ def plan(config):
     print(f"next_run_at={next_run_at(config, now).isoformat()}")
 
 
+def toggle_publish(enable):
+    """一键开关真实发布：同时改 dry_run 与 platforms.toutiao.enabled。"""
+    path = CONFIG_PATH if CONFIG_PATH.exists() else EXAMPLE_CONFIG_PATH
+    cfg = json.loads(path.read_text(encoding="utf-8"))
+    cfg["dry_run"] = not enable
+    cfg.setdefault("platforms", {}).setdefault("toutiao", {})["enabled"] = enable
+    path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"config={path}")
+    print(f"dry_run={cfg['dry_run']}")
+    print(f"toutiao.enabled={cfg['platforms']['toutiao']['enabled']}")
+    if enable:
+        print("下一步：先执行 python toutiao_browser.py authorize 完成一次人工登录")
+    else:
+        print("已回到「只生成不发布」模式")
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["run-once", "daemon", "next-interval", "plan"])
+    parser.add_argument(
+        "command",
+        choices=[
+            "run-once",
+            "daemon",
+            "next-interval",
+            "plan",
+            "publish-now",
+            "publish-dry-run",
+            "enable-publish",
+            "disable-publish",
+        ],
+    )
+    parser.add_argument("--submit", action="store_true", help="publish-now 默认只填页面不点发布")
     args = parser.parse_args()
 
     config = load_config()
@@ -126,6 +203,14 @@ def main():
         print(f"sleep_seconds={max(int((target - now).total_seconds()), 60)}")
     elif args.command == "plan":
         plan(config)
+    elif args.command == "publish-now":
+        publish_toutiao(config, submit=args.submit)
+    elif args.command == "publish-dry-run":
+        publish_toutiao(config, submit=False)
+    elif args.command == "enable-publish":
+        toggle_publish(True)
+    elif args.command == "disable-publish":
+        toggle_publish(False)
 
 
 if __name__ == "__main__":

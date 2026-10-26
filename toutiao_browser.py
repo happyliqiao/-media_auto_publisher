@@ -412,24 +412,42 @@ def publish_latest(dry_run=True):
 
         actions = set_toutiao_options(page, options)
         print("actions=" + json.dumps(actions, ensure_ascii=False))
-        clicked = click_first_match(page, ["button:has-text('定时发布')"], timeout=5000)
-        if clicked:
-            page.wait_for_timeout(1200)
-            confirm_clicked = click_first_match(page, ["button:has-text('预览并定时发布')"], timeout=5000)
+
+        offset = int(options.get("schedule_offset_hours", 0) or 0)
+        if offset > 0:
+            # 定时发布：时间已经在 set_toutiao_options 里填好
+            confirm_clicked = click_first_match(
+                page,
+                ["button:has-text('预览并定时发布')", "button:has-text('预览定时发布')"],
+                timeout=5000,
+            )
             if not confirm_clicked:
                 confirm_clicked = click_visible_button_text(page, "预览并定时发布")
+            if not confirm_clicked:
+                opened = click_first_match(page, ["text=定时发布", "label:has-text('定时发布')"], timeout=2000)
+                if opened:
+                    page.wait_for_timeout(1200)
+                    confirm_clicked = click_first_match(
+                        page,
+                        ["button:has-text('预览并定时发布')", "button:has-text('预览定时发布')"],
+                        timeout=5000,
+                    )
+                if not confirm_clicked:
+                    confirm_clicked = click_visible_button_text(page, "预览并定时发布")
             if not confirm_clicked:
                 print("schedule_confirm_button_not_found=true")
                 return 4
             page.wait_for_timeout(2000)
-            # Today Toutiao shows a second warning when ads are disabled.
+            # 关闭广告投放时头条会再弹一次确认
             click_visible_button_text(page, "确定")
         else:
-            clicked = click_first_match(page, ["button:has-text('发布')", "text=发布", "button:has-text('发表')"], timeout=5000)
-
-        if not clicked:
-            print("publish_button_not_found=true")
-            return 4
+            # 立即发布：用精确文本匹配，避免命中「预览并定时发布」
+            clicked = click_visible_button_text(page, "发布")
+            if not clicked:
+                clicked = click_first_match(page, ["text=发布", "button:has-text('发表')"], timeout=5000)
+            if not clicked:
+                print("publish_button_not_found=true")
+                return 4
 
         page.wait_for_timeout(5000)
         screenshot = ROOT / "logs" / "toutiao_submit_result.png"
