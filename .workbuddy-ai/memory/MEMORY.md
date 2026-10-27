@@ -46,17 +46,35 @@
 
 ## 本机运行约定
 - **playwright 装在系统 Python**（`C:\Users\liqiao\AppData\Local\Programs\Python\Python313`），**托管 Python 里没有**。`start_daemon.ps1` 会逐个探测候选解释器是否 `import playwright` 成功，优先用装了的那个，否则发布环节会被静默跳过。
-- 浏览器用本机 Microsoft Edge（Windows 分支走 Edge + CDP 9223），不需要额外下载 Chromium。
+- **浏览器必须用 Playwright `launch_persistent_context`**（Windows 传 `executable_path=Edge`）。独立 `subprocess.Popen` 起的 Edge 会在脚本退出后被回收，CDP 端口随即关闭。登录态存 `browser_state/toutiao`。
+- **本机只有 5.9GB 内存**，可用常在 0.2GB。浏览器启动必须带降内存参数（`--disable-gpu --renderer-process-limit=2 --disable-extensions --disable-background-networking --js-flags=--max-old-space-size=512`），否则 Playwright 会 `VirtualAlloc failed`。
 - 计划任务用 **Interactive 登录主体**（`install_startup_task.ps1`），否则有头浏览器起不来。
 - **后台日志必须行缓冲**：`main.py` 里 `sys.stdout.reconfigure(line_buffering=True)` + `start_daemon.ps1` 用 `-u`。否则 stdout 重定向到文件时 Python 块缓冲，日志长时间是空的。
 - PowerShell 脚本一律存为 **UTF-8 with BOM**（PS 5.1 读无 BOM 的中文会乱码）。
 - `main.py` 命令：`plan` / `run-once` / `daemon` / `next-interval` / `publish-dry-run` / `publish-now --submit` / `enable-publish` / `disable-publish`。
 - `enable-publish` 一条命令同时改 `config.json` 的 `dry_run` 与 `platforms.toutiao.enabled`。
 - 头条发布模式由 `platforms.toutiao.options.schedule_offset_hours` 决定：`0` = 立即发布，`>0` = 用头条自身定时发布。
-- 首次使用必须先 `python toutiao_browser.py authorize` 人工登录一次，登录态存 `browser_state/toutiao`。
+- **登录已过期时**先 `python toutiao_browser.py authorize` 人工登录一次，脚本会自动检测登录态并退出。
+
+## 头条页面 DOM 事实（2026-10-27 真机验证，勿再猜）
+- 标题：`textarea[placeholder*='标题']`；正文：`.ProseMirror`（唯一 contenteditable）。
+- 封面/广告是 `.byte-radio`；作品声明是 `.byte-checkbox`（需先点开「作品声明」面板）。
+- 发布按钮文案是 **「预览并发布」**（不是「发布」），点完变成「确认发布」，**两步**。
+- 登录判据在**创作者后台首页**做（作品管理/创作灵感/收益数据/草稿箱/粉丝数据），发布页没有这些标记。
+- **成功判据看接口**：`POST /mp/agw/article/publish` 返回 `code:0` 且 `data.pgc_id` 非 0。页面文案/URL 跳转都不可靠。
+- `code:7050 保存失败` 是草稿自动保存失败，与正式发布无关。
+- 页面元素要**批量枚举**（一次 evaluate 取全部），逐个 evaluate 会触发重渲染导致超时误判。
+
+## 防重复发布
+- 发布指纹库 `storage/published_toutiao.json`，指纹 = sha1(标题+正文前200字)[:16]。
+- 发布前查重命中即跳过；结果不确定时也记指纹。删掉指纹即可恢复。
+- **调试脚本绝对不能点「确认发布」** —— 2026-10-27 曾因 probe 脚本连点，同一篇发出 3 次。
 
 ## 发布节奏约定
 - 当前 `schedule.stages` 为 **6h → 4h → 3h → 2h**（原 4/3/2/1 已下调）。
 - 配合 `publish_hours: [7, 23]`，约合每天 3 → 4 → 6 → 8 篇。
 - 调频入口在 `config.json` 的 `schedule.stages`；提速前先观察真实账号数据。
 - 用户头条账号是**老号**（有一定内容基础），风控压力比新号小。
+- 账号名「较神666」，19 粉丝，2026-10-27 起内容主题转向「普通人如何正确使用 AI 工具」。
+- **主题转向有风险**：历史内容全是旧主题（Codex 免费额度），平台可能判定内容转向/低质。先发一篇观察数据再谈提速。
+- 2026-10-27 09:40 已发布《一个提问公式让AI从玩具变工具》（755 字，pgc_id 7701156416396083752）。
