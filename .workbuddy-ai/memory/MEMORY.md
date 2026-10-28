@@ -6,11 +6,17 @@
 
 ## 内容生产约定
 - 主题与风格写在 `config.json` 的 `topic` / `content`，不要写死在代码里。
-- **首选 LLM 生成**：`generation.provider = deepseek`，走标准库 urllib 调 OpenAI 兼容接口
-  （系统 Python 没装 `openai` 包，也不该去装）。密钥从 `generation.api_key_file` 指向的
-  `E:\liqiaobac\ai_news_automation\.env` 里读 `AI_NEWS_API_KEY`。
-- **模板模式（`TEMPLATES`）只是兜底，不能长期用**：5 套固定文本，只有场景词会变，
-  第 6 篇起必然与历史文章重复，会被查重拦下（实测 0.97 ≥ 0.65）。
+- **当前默认 `generation.provider = compose`：完全不需要 API Key。**
+  24 个小节随机抽 6 个 + 8 开头 / 8 过渡句 / 8 结尾 / 24 标题，按素材池原顺序排列保证连贯。
+  实测连续 60 篇相似度上限 0.55（阈值 0.65），字数 709–869，全部过审。
+- **扩素材池时注意**：18 节时相似度上限 0.588，24 节降到 0.550。加过渡句能把字数下限抬到 709。
+  改完必须跑 60 篇滑动窗口压测再提交。
+- **免费模型（可选）**：`provider` 填 `zhipu`（glm-4-flash 官方免费）/ `siliconflow` /
+  `openrouter` / `deepseek` 即可，预设写在 `content_generator.PROVIDER_PRESETS`。
+  走标准库 urllib 调 OpenAI 兼容接口，**不要装 `openai` 包**。Key 写进
+  `E:\liqiaobac\ai_news_automation\.env`，变量名用各家预设里的 `key_env`。
+- `provider = auto` 按 zhipu → siliconflow → openrouter → deepseek 找可用 Key，全失败回退 compose。
+- **DeepSeek 余额为 0**（HTTP 402），要用它得先充值。
 - 生成时把近期文章标题一起喂给模型，明确要求换角度，避免撞题。
 - 每篇必须包含 `topic.required_disclaimer`（结尾免责提示），审核器会校验。
 - 审核器内置与近期文章的**重复度检测**（字符二元组 Jaccard，阈值 `review.max_similarity` 默认 0.65）。
@@ -53,8 +59,15 @@
 - **浏览器必须用 Playwright `launch_persistent_context`**（Windows 传 `executable_path=Edge`）。独立 `subprocess.Popen` 起的 Edge 会在脚本退出后被回收，CDP 端口随即关闭。登录态存 `browser_state/toutiao`。
 - **本机只有 5.9GB 内存**，可用常在 0.2GB。浏览器启动必须带降内存参数（`--disable-gpu --renderer-process-limit=2 --disable-extensions --disable-background-networking --js-flags=--max-old-space-size=512`），否则 Playwright 会 `VirtualAlloc failed`。
 - 计划任务用 **Interactive 登录主体**（`install_startup_task.ps1`），否则有头浏览器起不来。
-- **daemon 自己写日志**：`main.py` 的 `_attach_daemon_log()` 把 stdout/stderr 落到 `logs/daemon.log`（5MB 轮转），**不再依赖启动脚本重定向**。启动脚本另有 `logs/launcher.log` 记录选中的解释器和 PID。
+- **计划任务直接执行 `pythonw.exe -u main.py daemon`**（带 `-WorkingDirectory`），
+  **不要再经过 PowerShell 启动脚本中转** —— 那条路径在本机环境下会崩溃或卡死。
+  `install_startup_task.ps1` 只在注册时探测带 playwright 的解释器并写进任务动作。
+- **daemon 自己写日志**：`main.py` 的 `_attach_daemon_log()` 把 stdout/stderr 落到 `logs/daemon.log`（5MB 轮转）。
+  `pythonw` 没有控制台，这是唯一能看到运行状态的地方。**PS 里 `Get-Content` 读它会显示乱码，用 Bash 的 cat 看。**
 - **单实例锁**：`storage/daemon.lock` 存 pid。判活必须用 `OpenProcess`+`GetExitCodeProcess`，**不能用 `os.kill(pid, 0)`——Windows 上那会真把进程杀掉**。
+- daemon 启动时若 `_publish_queue/toutiao/` 有未发布内容，**先补发再等待**，不新生成。
+- 发布超时 `timeout=true` 且日志里**没有 `browser_mode` 行** = 卡在启动浏览器，
+  先查是否有孤儿 Edge 占着 `browser_state/toutiao` profile 锁（杀掉进程树常留下）。
 - PowerShell 脚本一律存为 **UTF-8 with BOM**（PS 5.1 读无 BOM 的中文会乱码）。
 - `main.py` 命令：`plan` / `run-once` / `daemon` / `next-interval` / `publish-dry-run` / `publish-now --submit` / `enable-publish` / `disable-publish`。
 - `enable-publish` 一条命令同时改 `config.json` 的 `dry_run` 与 `platforms.toutiao.enabled`。
