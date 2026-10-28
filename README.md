@@ -97,15 +97,29 @@ python .\main.py daemon
 - 必需：Python 3.10+（只用标准库即可完成生成、审核、存档）
 - 发布所需：`playwright`（`pip install -r requirements.txt`）。浏览器用的是本机 Microsoft Edge，不需要额外下载 Chromium。
 
-> `start_daemon.ps1` 会自动挑选**已安装 playwright 的** Python 解释器，避免选错导致发布环节被跳过。
+> `install_startup_task.ps1` 会在注册时探测**已安装 playwright 的**解释器，并把计划任务直接指向 `pythonw.exe`（不经过 PowerShell 中转），避免选错解释器导致发布被跳过。
 
-## 使用 OpenAI 生成内容
+## 内容生成：三种模式
 
-默认使用本地模板生成，不需要联网。若要使用 OpenAI API：
+`config.json` 里的 `generation.provider` 决定用哪种方式生成：
 
-1. 把 `config.json` 里的 `generation.provider` 改为 `openai`。
-2. 设置环境变量 `OPENAI_API_KEY`。
-3. 安装依赖：`python -m pip install openai`。
+| provider | 是否需要 Key | 说明 |
+|---|---|---|
+| `compose`（默认） | **不需要** | 从内置素材池组合成文：24 个小节随机抽 6 个，配 8 个开头、8 个过渡句、8 个结尾、24 个标题。组合数约百万级，实测连续 60 篇相似度上限 0.55（阈值 0.65），全部过审 |
+| `zhipu` / `siliconflow` / `openrouter` / `deepseek` | 需要 | 走各家 OpenAI 兼容接口，标准库直接调用，不用装 `openai` 包 |
+| `auto` | 自动 | 按 zhipu → siliconflow → openrouter → deepseek 顺序找可用的 Key，全部失败则回退 `compose` |
+
+### 用免费模型（可选）
+
+`compose` 不需要任何账号就能跑。如果想要更自然的文笔，可以接免费模型：
+
+1. 去 [智谱开放平台](https://open.bigmodel.cn) 注册，创建 API Key（`glm-4-flash` 官方免费）。
+2. 把 Key 写进 `E:\liqiaobac\ai_news_automation\.env`：`ZHIPU_API_KEY=你的key`
+3. 把 `config.json` 的 `generation.provider` 改成 `zhipu`。
+
+硅基流动、OpenRouter 同理，改 provider 名字即可，`api_base` 和 `model` 已在 `content_generator.PROVIDER_PRESETS` 里预置。
+
+> 不推荐使用任何「无需 Key 的公共模型接口」——这类服务基本都是逆向网页版，随时失效，也不适合放在会自动发布的流程里。
 
 ## 合规提醒
 

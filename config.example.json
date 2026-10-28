@@ -39,12 +39,9 @@
     "campaign_url": ""
   },
   "generation": {
-    "provider": "deepseek",
-    "api_key_env": "DEEPSEEK_API_KEY",
+    "provider": "compose",
     "api_key_file": "E:/liqiaobac/ai_news_automation/.env",
-    "api_key_file_env": "AI_NEWS_API_KEY",
-    "api_base": "https://api.deepseek.com/v1",
-    "model": "deepseek-chat"
+    "api_key_file_env": "AI_NEWS_API_KEY"
   },
   "platforms": {
     "toutiao": {

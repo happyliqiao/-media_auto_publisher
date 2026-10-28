@@ -211,6 +211,21 @@ def release_daemon_lock(lock_path):
         pass
 
 
+def _pending_queue_exists(config):
+    """队列里是否还有未发布的内容。"""
+    queue_dir = Path(config.get("storage_dir", "")) / "_publish_queue" / "toutiao"
+    if not queue_dir.exists():
+        return False
+    for path in queue_dir.glob("*.json"):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not data.get("consumed_at"):
+            return True
+    return False
+
+
 def daemon(config):
     tz = get_timezone(config)
     log_handle = _attach_daemon_log()
@@ -222,17 +237,27 @@ def daemon(config):
 
     try:
         print(f"daemon_started=true pid={os.getpid()} at={datetime.now(tz).isoformat(timespec='seconds')}")
+        # 重启后如果队列里还有没发出去的稿子，先补发，避免又生成一篇把旧稿变成孤儿
+        resumed = False
+        if _pending_queue_exists(config):
+            print("pending_queue_found=true 先补发积压内容，本轮不新生成")
+            publish_toutiao(config, submit=True)
+            resumed = True
+
         while True:
-            try:
-                passed = run_once(config)
-            except Exception as exc:  # 单次失败不应中断守护进程
-                print(f"run_failed={exc.__class__.__name__}: {exc}")
+            if resumed:
+                resumed = False
             else:
-                # 只有过审并入队的稿子才去发布，未过审时不碰浏览器
-                if passed:
-                    publish_toutiao(config, submit=True)
+                try:
+                    passed = run_once(config)
+                except Exception as exc:  # 单次失败不应中断守护进程
+                    print(f"run_failed={exc.__class__.__name__}: {exc}")
                 else:
-                    print("publish_skipped=review_not_passed")
+                    # 只有过审并入队的稿子才去发布，未过审时不碰浏览器
+                    if passed:
+                        publish_toutiao(config, submit=True)
+                    else:
+                        print("publish_skipped=review_not_passed")
             now = datetime.now(tz)
             target = next_run_at(config, now)
             sleep_seconds = max(int((target - now).total_seconds()), 60)
