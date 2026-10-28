@@ -6,13 +6,17 @@
 
 ## 内容生产约定
 - 主题与风格写在 `config.json` 的 `topic` / `content`，不要写死在代码里。
-- 文章一律走 5 套模板轮换（`content_generator.TEMPLATES`），避免连续多篇结构雷同。
-- 模板选择用「日期+小时」做随机种子：同一小时内重复运行结果稳定，跨小时自动轮换。
+- **首选 LLM 生成**：`generation.provider = deepseek`，走标准库 urllib 调 OpenAI 兼容接口
+  （系统 Python 没装 `openai` 包，也不该去装）。密钥从 `generation.api_key_file` 指向的
+  `E:\liqiaobac\ai_news_automation\.env` 里读 `AI_NEWS_API_KEY`。
+- **模板模式（`TEMPLATES`）只是兜底，不能长期用**：5 套固定文本，只有场景词会变，
+  第 6 篇起必然与历史文章重复，会被查重拦下（实测 0.97 ≥ 0.65）。
+- 生成时把近期文章标题一起喂给模型，明确要求换角度，避免撞题。
 - 每篇必须包含 `topic.required_disclaimer`（结尾免责提示），审核器会校验。
 - 审核器内置与近期文章的**重复度检测**（字符二元组 Jaccard，阈值 `review.max_similarity` 默认 0.65）。
 
 ## 排期约定
-- 发布频率在 `config.schedule.stages` 中按周递增：4h → 3h → 2h → 1h；`until_week: 0` 表示兜底档。
+- 发布频率在 `config.schedule.stages` 中按周递增，当前为 **6h → 4h → 3h → 2h**；`until_week: 0` 表示兜底档。
 - `config.schedule.publish_hours` 控制可发布时段（默认 `[7, 23]`），调度器会自动把越界时间推回窗口内。
 - `python main.py plan` 可预览当天全部计划时间点。
 
@@ -45,16 +49,27 @@
 - 未过审稿件存入 `storage_dir/_rejected/`，不进入查重基线（`storage.recent_texts` 跳过 `_` 开头的目录）。
 
 ## 本机运行约定
-- **playwright 装在系统 Python**（`C:\Users\liqiao\AppData\Local\Programs\Python\Python313`），**托管 Python 里没有**。`start_daemon.ps1` 会逐个探测候选解释器是否 `import playwright` 成功，优先用装了的那个，否则发布环节会被静默跳过。
+- **playwright 装在系统 Python**（`C:\Users\liqiao\AppData\Local\Programs\Python\Python313`），**托管 Python 里没有**。`start_daemon.ps1` 用固定候选列表逐个探测 `import playwright`，优先用装了的那个。
 - **浏览器必须用 Playwright `launch_persistent_context`**（Windows 传 `executable_path=Edge`）。独立 `subprocess.Popen` 起的 Edge 会在脚本退出后被回收，CDP 端口随即关闭。登录态存 `browser_state/toutiao`。
 - **本机只有 5.9GB 内存**，可用常在 0.2GB。浏览器启动必须带降内存参数（`--disable-gpu --renderer-process-limit=2 --disable-extensions --disable-background-networking --js-flags=--max-old-space-size=512`），否则 Playwright 会 `VirtualAlloc failed`。
 - 计划任务用 **Interactive 登录主体**（`install_startup_task.ps1`），否则有头浏览器起不来。
-- **后台日志必须行缓冲**：`main.py` 里 `sys.stdout.reconfigure(line_buffering=True)` + `start_daemon.ps1` 用 `-u`。否则 stdout 重定向到文件时 Python 块缓冲，日志长时间是空的。
+- **daemon 自己写日志**：`main.py` 的 `_attach_daemon_log()` 把 stdout/stderr 落到 `logs/daemon.log`（5MB 轮转），**不再依赖启动脚本重定向**。启动脚本另有 `logs/launcher.log` 记录选中的解释器和 PID。
+- **单实例锁**：`storage/daemon.lock` 存 pid。判活必须用 `OpenProcess`+`GetExitCodeProcess`，**不能用 `os.kill(pid, 0)`——Windows 上那会真把进程杀掉**。
 - PowerShell 脚本一律存为 **UTF-8 with BOM**（PS 5.1 读无 BOM 的中文会乱码）。
 - `main.py` 命令：`plan` / `run-once` / `daemon` / `next-interval` / `publish-dry-run` / `publish-now --submit` / `enable-publish` / `disable-publish`。
 - `enable-publish` 一条命令同时改 `config.json` 的 `dry_run` 与 `platforms.toutiao.enabled`。
 - 头条发布模式由 `platforms.toutiao.options.schedule_offset_hours` 决定：`0` = 立即发布，`>0` = 用头条自身定时发布。
 - **登录已过期时**先 `python toutiao_browser.py authorize` 人工登录一次，脚本会自动检测登录态并退出。
+- **用工具直接起的 daemon 会被沙箱回收**（子进程随会话结束），验证自动运行必须靠 `Start-ScheduledTask`。
+
+## 本机环境陷阱（2026-10-28 踩过）
+- **进程环境里同时存在 `http_proxy`/`HTTP_PROXY`、`https_proxy`/`HTTPS_PROXY`**（值都是 `http://127.0.0.1:53611`）。
+  这会让 PS 的环境变量提供程序抛「已添加了具有相同键的项」，`Get-ChildItem Env:` 和
+  `Start-Process` 全部失败。**启动脚本一律用 `[System.Diagnostics.Process]::Start`，不要用 `Start-Process`。**
+- 计划任务 `AI_Content_AutoPublisher`：AtLogOn + 每 30 分钟看门狗两个触发器。
+  项目目录从 `E:\media_auto_publisher` 搬到 `E:\liqiaobac\-media_auto_publisher` 后，
+  旧任务的路径失效导致自动运行彻底停摆——**搬目录后必须重跑 `install_startup_task.ps1`**。
+- 系统 Python 没有 `tzdata`，`ZoneInfo("Asia/Shanghai")` 会失败；`main.get_timezone()` 有 `timedelta(hours=8)` 回退，别在别处直接用 `ZoneInfo`。
 
 ## 头条页面 DOM 事实（2026-10-27 真机验证，勿再猜）
 - 标题：`textarea[placeholder*='标题']`；正文：`.ProseMirror`（唯一 contenteditable）。
