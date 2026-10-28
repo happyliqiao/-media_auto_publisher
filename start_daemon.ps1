@@ -3,72 +3,97 @@
 $ProjectDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $LogDir = Join-Path $ProjectDir "logs"
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+$LaunchLog = Join-Path $LogDir "launcher.log"
 
-function Test-HasPlaywright($exe) {
-    if (-not $exe) { return $false }
+function Write-LaunchLog([string]$Message) {
     try {
-        & $exe -c "import playwright" 2>$null | Out-Null
+        $line = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss") + "  " + $Message
+        Add-Content -Path $LaunchLog -Value $line -Encoding UTF8
+    } catch {
+        # 日志失败不能影响启动
+    }
+}
+
+function Test-HasPlaywright([string]$Exe) {
+    if (-not $Exe) { return $false }
+    if (-not (Test-Path -LiteralPath $Exe)) { return $false }
+    try {
+        & $Exe -c "import playwright" 2>$null | Out-Null
         return ($LASTEXITCODE -eq 0)
     } catch {
         return $false
     }
 }
 
-function Resolve-Python {
-    $candidates = @()
+try {
+    # 这台机器的环境里同时存在 http_proxy 与 HTTP_PROXY（大小写各一份），
+    # PowerShell 的环境变量提供程序会因此抛「已添加了具有相同键的项」，
+    # 连带 Start-Process 等 cmdlet 一起失败。这里只清理指向本机回环的代理，
+    # 避免把正常的公司代理也误删。
+    foreach ($name in @('http_proxy', 'https_proxy', 'all_proxy')) {
+        try {
+            $value = [System.Environment]::GetEnvironmentVariable($name)
+            if ($value -and ($value -match '127\.0\.0\.1|localhost')) {
+                [System.Environment]::SetEnvironmentVariable($name, $null)
+                [System.Environment]::SetEnvironmentVariable($name.ToUpper(), $null)
+                Write-LaunchLog ("cleared_loopback_proxy=" + $name + " value=" + $value)
+            }
+        } catch {
+        }
+    }
+
+    $candidates = New-Object System.Collections.Generic.List[string]
 
     $venv = Join-Path $ProjectDir ".venv\Scripts\python.exe"
-    if (Test-Path $venv) { $candidates += $venv }
+    if (Test-Path -LiteralPath $venv) { $candidates.Add($venv) }
 
-    $managed = Join-Path $env:USERPROFILE ".workbuddy-ai\binaries\python\versions"
-    if (Test-Path $managed) {
-        $hit = Get-ChildItem -Path $managed -Filter "python.exe" -Recurse -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -notlike "*\envs\*" } |
-            Sort-Object FullName -Descending |
-            Select-Object -First 1
-        if ($hit) { $candidates += $hit.FullName }
+    foreach ($ver in @('314', '313', '312', '311', '310')) {
+        $p = Join-Path $env:LOCALAPPDATA ("Programs\Python\Python" + $ver + "\python.exe")
+        if (Test-Path -LiteralPath $p) { $candidates.Add($p) }
     }
 
-    $local = Get-ChildItem -Path (Join-Path $env:LOCALAPPDATA "Programs\Python") -Filter "python.exe" -Recurse -ErrorAction SilentlyContinue |
-        Sort-Object FullName -Descending | Select-Object -First 1
-    if ($local) { $candidates += $local.FullName }
+    $managedRoot = Join-Path $env:USERPROFILE ".workbuddy-ai\binaries\python\versions"
+    if (Test-Path -LiteralPath $managedRoot) {
+        foreach ($ver in @('3.13.12', '3.13.13', '3.12')) {
+            $p = Join-Path $managedRoot ($ver + "\python.exe")
+            if (Test-Path -LiteralPath $p) { $candidates.Add($p) }
+        }
+    }
 
     $cmd = Get-Command python -ErrorAction SilentlyContinue
-    if ($cmd) { $candidates += $cmd.Source }
+    if ($cmd -and $cmd.Source) { $candidates.Add($cmd.Source) }
 
-    $fallback = $null
+    $Python = $null
     foreach ($exe in $candidates) {
-        if (-not $fallback) { $fallback = $exe }
-        # 发布功能依赖 playwright，优先选装了的解释器
-        if (Test-HasPlaywright $exe) { return $exe }
+        if (Test-HasPlaywright $exe) { $Python = $exe; break }
     }
-    if ($fallback) { return $fallback }
+    if (-not $Python) {
+        foreach ($exe in $candidates) {
+            if (Test-Path -LiteralPath $exe) { $Python = $exe; break }
+        }
+    }
+    if (-not $Python) { throw "Python interpreter not found" }
 
-    throw "Python not found. Create a venv in the project or install Python 3.10+."
+    $Main = Join-Path $ProjectDir "main.py"
+    if (-not (Test-Path -LiteralPath $Main)) { throw "main.py not found: $Main" }
+
+    # 用 .NET 直接启动子进程：Start-Process 在环境变量存在大小写重复键时会抛
+    # ArgumentException，导致启动环节彻底失败。daemon 的日志由 main.py 自己写。
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $Python
+    $psi.Arguments = '-u "' + $Main + '" daemon'
+    $psi.WorkingDirectory = $ProjectDir
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+
+    $proc = [System.Diagnostics.Process]::Start($psi)
+
+    Write-LaunchLog ("started pid=" + $proc.Id + " python=" + $Python)
+    Write-Host ("started=true pid=" + $proc.Id)
+    Write-Host ("python=" + $Python)
+    Write-Host ("logs=" + $LogDir)
+} catch {
+    Write-LaunchLog ("failed: " + $_.Exception.Message)
+    Write-Host ("launcher_failed=" + $_.Exception.Message)
+    exit 1
 }
-
-$Python = Resolve-Python
-$OutLog = Join-Path $LogDir "daemon.out.log"
-$ErrLog = Join-Path $LogDir "daemon.err.log"
-$Main = Join-Path $ProjectDir "main.py"
-
-$existing = Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -like "*main.py*daemon*" -and $_.CommandLine -like "*$ProjectDir*" }
-
-if ($existing) {
-    Write-Host "daemon_already_running=true"
-    exit 0
-}
-
-Start-Process `
-  -FilePath $Python `
-  -ArgumentList @("-u", $Main, "daemon") `
-  -WorkingDirectory $ProjectDir `
-  -WindowStyle Hidden `
-  -RedirectStandardOutput $OutLog `
-  -RedirectStandardError $ErrLog
-
-Start-Sleep -Seconds 2
-Write-Host "started=true"
-Write-Host "python=$Python"
-Write-Host "logs=$LogDir"

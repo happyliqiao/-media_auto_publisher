@@ -36,12 +36,15 @@
     "min_chars": 700,
     "max_chars": 1600,
     "style": "平实、具体、有分寸，面向没有技术背景的普通上班族和学习者",
-    "campaign_url": "",
-    "openai_model": "gpt-4.1"
+    "campaign_url": ""
   },
   "generation": {
-    "provider": "template",
-    "openai_api_key_env": "OPENAI_API_KEY"
+    "provider": "deepseek",
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "api_key_file": "E:/liqiaobac/ai_news_automation/.env",
+    "api_key_file_env": "AI_NEWS_API_KEY",
+    "api_base": "https://api.deepseek.com/v1",
+    "model": "deepseek-chat"
   },
   "platforms": {
     "toutiao": {

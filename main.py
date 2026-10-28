@@ -73,8 +73,9 @@ def run_once(config):
     publishers = PublisherManager(config)
 
     compare_count = int(config.get("review", {}).get("recent_compare_count", 20))
-    content = generator.generate(now)
+    # 先取近期文章，既用于查重，也喂给生成器避免撞题
     recent = storage.recent_texts(compare_count)
+    content = generator.generate(now, recent)
     review = reviewer.review(content, recent)
     # 未通过审核（例如与近期内容重复）的稿件不进入正式存档和查重基线
     saved = storage.save(content, now, review, rejected=not review["passed"])
@@ -127,22 +128,118 @@ def publish_toutiao(config, submit=True):
         return None
 
 
+def _attach_daemon_log():
+    """把 daemon 的 stdout/stderr 写到 logs/daemon.log。
+
+    后台启动时不再依赖 PowerShell 的 Start-Process 重定向（那台机器的环境变量
+    里有大小写重复键，Start-Process 会直接抛异常），由进程自己落盘更可靠。
+    """
+    log_dir = ROOT / "logs"
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        path = log_dir / "daemon.log"
+        if path.exists() and path.stat().st_size > 5 * 1024 * 1024:
+            path.replace(log_dir / "daemon.log.1")
+        handle = open(path, "a", encoding="utf-8", buffering=1)
+    except OSError:
+        return None
+    sys.stdout = handle
+    sys.stderr = handle
+    return handle
+
+
+def _pid_alive(pid):
+    if not pid or pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return code.value == STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except OSError:
+        return False
+
+
+def acquire_daemon_lock():
+    """同一时刻只允许一个 daemon 实例，避免看门狗把进程越拉越多。
+
+    返回 (状态, 锁文件路径)，状态为 acquired / busy / error。
+    """
+    lock_path = ROOT / "storage" / "daemon.lock"
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        if lock_path.exists():
+            try:
+                pid = int(json.loads(lock_path.read_text(encoding="utf-8")).get("pid") or 0)
+            except (ValueError, json.JSONDecodeError, OSError):
+                pid = 0
+            if pid and pid != os.getpid() and _pid_alive(pid):
+                print(f"daemon_already_running=true pid={pid}")
+                return "busy", lock_path
+        lock_path.write_text(
+            json.dumps(
+                {"pid": os.getpid(), "started_at": datetime.now().isoformat(timespec="seconds")},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        print(f"daemon_lock_failed={exc}")
+        return "error", lock_path
+    return "acquired", lock_path
+
+
+def release_daemon_lock(lock_path):
+    try:
+        if lock_path and lock_path.exists():
+            lock_path.unlink()
+    except OSError:
+        pass
+
+
 def daemon(config):
     tz = get_timezone(config)
-    print("daemon_started=true")
-    while True:
-        try:
-            run_once(config)
-        except Exception as exc:  # 单次失败不应中断守护进程
-            print(f"run_failed={exc.__class__.__name__}: {exc}")
-        else:
-            # 生成通过审核并入队后，立刻尝试发布，发布时刻≈本轮排期时间
-            publish_toutiao(config, submit=True)
-        now = datetime.now(tz)
-        target = next_run_at(config, now)
-        sleep_seconds = max(int((target - now).total_seconds()), 60)
-        print(f"next_run_at={target.isoformat()} sleep_seconds={sleep_seconds}")
-        time.sleep(sleep_seconds)
+    log_handle = _attach_daemon_log()
+    status, lock_path = acquire_daemon_lock()
+    if status == "busy":
+        if log_handle:
+            log_handle.flush()
+        return 1
+
+    try:
+        print(f"daemon_started=true pid={os.getpid()} at={datetime.now(tz).isoformat(timespec='seconds')}")
+        while True:
+            try:
+                passed = run_once(config)
+            except Exception as exc:  # 单次失败不应中断守护进程
+                print(f"run_failed={exc.__class__.__name__}: {exc}")
+            else:
+                # 只有过审并入队的稿子才去发布，未过审时不碰浏览器
+                if passed:
+                    publish_toutiao(config, submit=True)
+                else:
+                    print("publish_skipped=review_not_passed")
+            now = datetime.now(tz)
+            target = next_run_at(config, now)
+            sleep_seconds = max(int((target - now).total_seconds()), 60)
+            print(f"next_run_at={target.isoformat()} sleep_seconds={sleep_seconds}")
+            time.sleep(sleep_seconds)
+    finally:
+        release_daemon_lock(lock_path)
 
 
 def plan(config):

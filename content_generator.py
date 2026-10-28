@@ -1,5 +1,28 @@
+import json
 import os
 import random
+import urllib.error
+import urllib.request
+
+
+# 复用的密钥文件（ai_news_automation 项目里已配好 DeepSeek 密钥）
+DEFAULT_ENV_FILE = r"E:\liqiaobac\ai_news_automation\.env"
+
+
+def _read_env_file(path):
+    """从 .env 读取 KEY=VALUE，读不到就返回空字典。"""
+    values = {}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                values[key.strip()] = value.strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return values
 
 
 SCENARIOS = [
@@ -276,55 +299,120 @@ class ContentGenerator:
     def __init__(self, config):
         self.config = config
 
-    def generate(self, now):
-        provider = self.config.get("generation", {}).get("provider", "template")
-        if provider == "openai":
-            return self._generate_with_openai(now)
+    def generate(self, now, recent_texts=None):
+        gen_cfg = self.config.get("generation", {}) or {}
+        provider = (gen_cfg.get("provider") or "template").strip().lower()
+        if provider in {"deepseek", "openai"}:
+            try:
+                return self._generate_with_llm(now, provider, gen_cfg, recent_texts or [])
+            except Exception as exc:
+                # 模型不可用时退回模板，保证 daemon 不会因为接口故障停摆
+                print(f"llm_generate_failed={exc.__class__.__name__}: {exc}")
+                print("fallback=template")
         return self._generate_with_template(now)
 
-    def _generate_with_openai(self, now):
-        api_key_env = self.config.get("generation", {}).get("openai_api_key_env", "OPENAI_API_KEY")
-        if not os.getenv(api_key_env):
-            raise RuntimeError(f"未设置环境变量 {api_key_env}")
+    def _resolve_api_key(self, gen_cfg, provider):
+        env_name = gen_cfg.get("api_key_env") or (
+            "DEEPSEEK_API_KEY" if provider == "deepseek" else "OPENAI_API_KEY"
+        )
+        key = os.getenv(env_name)
+        if key:
+            return key
 
-        try:
-            from openai import OpenAI
-        except ImportError as exc:
-            raise RuntimeError("缺少 openai 依赖，请运行 python -m pip install openai") from exc
+        env_file = gen_cfg.get("api_key_file") or DEFAULT_ENV_FILE
+        file_env_name = gen_cfg.get("api_key_file_env") or "AI_NEWS_API_KEY"
+        values = _read_env_file(env_file)
+        key = values.get(file_env_name) or values.get(env_name)
+        if key:
+            return key
+        raise RuntimeError(f"未找到 API Key（环境变量 {env_name} 或 {env_file} 中的 {file_env_name}）")
 
-        client = OpenAI(api_key=os.getenv(api_key_env))
-        model = self.config.get("content", {}).get("openai_model", "gpt-4.1")
-        campaign_url = self.config.get("content", {}).get("campaign_url", "")
-        min_chars = int(self.config.get("content", {}).get("min_chars", 700))
-        max_chars = int(self.config.get("content", {}).get("max_chars", 1600))
-        style = self.config.get("content", {}).get("style", "")
+    def _build_prompt(self, provider, recent_texts):
+        content_cfg = self.config.get("content", {}) or {}
         topic = self.config["topic"]["primary"]
         disclaimer = self.config["topic"]["required_disclaimer"]
+        style = content_cfg.get("style", "")
+        campaign_url = content_cfg.get("campaign_url", "")
+        min_chars = int(content_cfg.get("min_chars", 700))
+        max_chars = int(content_cfg.get("max_chars", 1600))
         scenario = random.choice(SCENARIOS)
 
-        prompt = f"""
-请生成一篇适合今日头条、微信公众号、小红书二次改写发布的新媒体中文文案。
+        recent_titles = []
+        for text in recent_texts[:8]:
+            for line in text.splitlines():
+                line = line.strip()
+                if line.startswith("# "):
+                    recent_titles.append(line[2:].strip())
+                    break
+
+        avoid = ""
+        if recent_titles:
+            avoid = "\n6. 以下标题已经用过，必须换一个完全不同的切入角度和标题，不要复用：\n" + "\n".join(
+                f"   - {title}" for title in recent_titles
+            )
+
+        return f"""请写一篇适合今日头条发布的中文文章。
 
 主题：{topic}
 风格：{style}
 
-要求：
+硬性要求：
 1. 正文 {min_chars}-{max_chars} 字。
-2. 标题必须 30 个汉字以内，要有吸引力，但不能夸大。
-3. 必须出现"AI"和"普通人"这两个词。
-4. 必须围绕一个具体场景展开：{scenario}。
-5. 结构要清晰，有小标题，短段落，开头能抓住人。
-6. 不写月入过万、躺赚、包学会、割韭菜这类夸大或诱导表述。
-7. 结尾自然加入提示：{disclaimer}
-8. 输出 Markdown，包含一级标题、正文、小标题、结尾建议。
-9. 不要在正文底部输出生成时间或时间戳。
-10. 活动链接如果为空就不要硬写链接。活动链接：{campaign_url}
-"""
-        response = client.responses.create(
-            model=model,
-            input=prompt,
+2. 第一行是 Markdown 一级标题，标题不超过 25 个汉字，具体、有信息量，不用夸张疑问句。
+3. 正文中必须出现"AI"和"普通人"这两个词。
+4. 围绕一个具体场景展开：{scenario}。
+5. 有小标题，短段落，开头直接进入内容，不要写"在这个信息爆炸的时代"这类套话。{avoid}
+7. 不要出现月入过万、躺赚、包学会、割韭菜、稳赚不赔这类夸大或诱导表述。
+8. 结尾另起一行，原样写上：提示：{disclaimer}
+9. 只输出 Markdown 正文，不要输出任何解释、前言或生成时间。
+10. {"不要写任何网址或推广链接。" if not campaign_url else "活动链接：" + campaign_url}"""
+
+    def _generate_with_llm(self, now, provider, gen_cfg, recent_texts):
+        api_key = self._resolve_api_key(gen_cfg, provider)
+        default_base = "https://api.deepseek.com/v1" if provider == "deepseek" else "https://api.openai.com/v1"
+        default_model = "deepseek-chat" if provider == "deepseek" else "gpt-4.1"
+        base = (gen_cfg.get("api_base") or default_base).rstrip("/")
+        model = gen_cfg.get("model") or default_model
+
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "你是中文新媒体编辑，写作克制、具体、有分寸，不写套话。"},
+                {"role": "user", "content": self._build_prompt(provider, recent_texts)},
+            ],
+            "temperature": 1.15,
+            "max_tokens": 2400,
+        }
+        request = urllib.request.Request(
+            base + "/chat/completions",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
         )
-        return response.output_text
+
+        last_error = None
+        for attempt in range(2):
+            try:
+                with urllib.request.urlopen(request, timeout=120) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                text = (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
+                text = (text or "").strip()
+                if not text:
+                    raise RuntimeError("模型返回空内容")
+                return text + "\n"
+            except urllib.error.HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="replace")[:200]
+                last_error = f"HTTP {exc.code}: {detail}"
+                if exc.code in (401, 403):
+                    break
+            except Exception as exc:
+                last_error = f"{exc.__class__.__name__}: {exc}"
+            if attempt == 0:
+                continue
+        raise RuntimeError(f"模型调用失败 {last_error}")
 
     def _generate_with_template(self, now):
         # 用「日期+小时」做种子：同一小时内结果稳定，跨小时自动轮换模板，
